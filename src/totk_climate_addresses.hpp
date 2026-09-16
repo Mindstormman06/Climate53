@@ -56,6 +56,19 @@ constexpr Patch32 kBoundPatches[] = {
     { 0x1B54514, 0x7100D11F, 0x7100D51F, "bound @1b54514"                  },
 };
 
+// Climate::onLoadGameData restores the weather forecast from the save file,
+// overwriting the one Climate::initialize just generated from the climate's
+// own rates. On an existing save that means the schedule baked in months ago
+// under the previous climate wins, which is why temperature and wind take
+// effect immediately but the weather never changes.
+//
+// Returning from it immediately leaves the freshly generated forecast in
+// place. It only carries climate forecast state, so skipping it costs nothing
+// but forecast persistence across a save/load.
+constexpr Patch32 kSkipSaveRestorePatch = {
+    0x0DB4234, 0xD101C3FF, 0xD65F03C0, "Climate::onLoadGameData -> ret"
+};
+
 namespace Offsets {
     constexpr uintptr_t Climate_NameTable_Slot0  = 0x043EE850; // -> "HyrulePlainClimate"
     constexpr uintptr_t Climate_NameTable_Slot52 = 0x043EE9F0; // null at rest

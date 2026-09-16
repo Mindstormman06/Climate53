@@ -5,7 +5,11 @@ namespace Climate53 {
 
 static const char kCustomClimate53Name[] = "CustomClimate53";
 
-static constexpr bool kDiagnoseViaSlot0 = true;
+static constexpr bool kDiagnoseViaSlot0 = false;
+
+// Stop the save file from restoring the old weather forecast over the one
+// generated from this climate's rates. See kSkipSaveRestorePatch.
+static constexpr bool kSkipClimateSaveRestore = true;
 
 static bool ApplyAll(const Patch32* patches, uint32_t count, const char* group) {
     for (uint32_t i = 0; i < count; ++i) {
@@ -57,6 +61,12 @@ bool Install() {
 
     if (!ApplyAll(kBoundPatches, sizeof(kBoundPatches) / sizeof(kBoundPatches[0]), "bounds")) {
         return false;
+    }
+
+    if (kSkipClimateSaveRestore) {
+        if (!ApplyAll(&kSkipSaveRestorePatch, 1, "skip save-restore")) return false;
+        WIIXL_LOG("Climate53: the saved weather forecast will NOT be restored - the "
+                  "forecast generated from this climate stands");
     }
 
     WIIXL_LOG("Climate53: installed - climate %d is \"%s\"", (int)kCustomClimateIndex, kCustomClimate53Name);
