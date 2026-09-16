@@ -4,24 +4,8 @@
 
 namespace Climate53 {
 
-// Index of the climate this mod adds (the 53rd, 0-based).
 constexpr uint32_t kCustomClimateIndex = 52;
 
-// One climate record is 0x178 bytes. Stock, the Climate object is allocated
-// 0x4C70 bytes: 52 * 0x178 = 0x4C60 of record array, then a 13-byte tail member
-// at +0x4C60 and 3 bytes of padding.
-//
-// This mod grows the object so the 53rd record is a real array entry rather
-// than something bolted on the side:
-//
-//        stock                          patched
-//   0x0000 .. 0x4C60  records 0-51   0x0000 .. 0x4DD8  records 0-52
-//   0x4C60 .. 0x4C6D  tail member    0x4DD8 .. 0x4DE5  tail member
-//   size 0x4C70                      size 0x4DE8
-//
-// Every accessor then works untouched, because index 52 is in range and lands
-// on real memory. The tail member is referenced by exactly six instructions,
-// all verified to reach the Climate object (via [parent+0x220] or as `this`).
 constexpr uint32_t kClimateRecordSize = 0x178;
 constexpr uint32_t kStockArraySize    = 52 * kClimateRecordSize; // 0x4C60
 constexpr uint32_t kNewArraySize      = 53 * kClimateRecordSize; // 0x4DD8
@@ -34,8 +18,6 @@ struct Patch32 {
 };
 
 // --- layout -----------------------------------------------------------------
-// Generated from the decompressed main NSO; `from` is the live word at rest, so
-// every one of these is origin-checked against the real binary.
 constexpr Patch32 kLayoutPatches[] = {
     { 0x0D6881C, 0x52898E15, 0x5289BD15, "object allocation size 0x4C70 -> 0x4DE8" },
     { 0x0D68844, 0x52898C08, 0x5289BB08, "ctor: tail base for the 13-byte zero"    },
@@ -47,15 +29,6 @@ constexpr Patch32 kLayoutPatches[] = {
 };
 
 // --- bounds -----------------------------------------------------------------
-// Every climate index bound in the binary: found by scanning .text for the
-// 0x178 record stride and correlating each nearby compare, plus the name lookup
-// and palette guards which are not stride-adjacent.
-//
-// Five of these are the accessor clamp `index < 52 ? index : 0` (0x0802BE4,
-// 0x1219B40, 0x1B4D2EC, 0x1B4D30C, 0x1B4D340) - that idiom is what silently
-// turned climate 52 back into climate 0 and made the mod look inert.
-//
-// A bound missed here is benign: that path just keeps clamping to 0.
 constexpr Patch32 kBoundPatches[] = {
     { 0x07E85BC, 0x7100D01F, 0x7100D41F, "bound @07e85bc"                  },
     { 0x0802BE4, 0x7100D05F, 0x7100D45F, "accessor clamp @0802be4"         },
@@ -84,14 +57,6 @@ constexpr Patch32 kBoundPatches[] = {
 };
 
 namespace Offsets {
-    // The climate name registry: a static array of 52 `const char*` in .data at
-    // 0x043EE850, pointing into a string blob at 0x043EE3B8. Code reaches it as
-    // [*(0x0463B258) + 0x498 + index*8]. Two null slots follow the 52 entries;
-    // the first is index 52.
-    //
-    // This lives in .data, which the game already has mapped RW, so it is
-    // outside the alias wiixl.patch writes code through - it needs a plain
-    // store, not a patch.
     constexpr uintptr_t Climate_NameTable_Slot0  = 0x043EE850; // -> "HyrulePlainClimate"
     constexpr uintptr_t Climate_NameTable_Slot52 = 0x043EE9F0; // null at rest
 }
