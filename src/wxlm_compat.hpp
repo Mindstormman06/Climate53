@@ -13,7 +13,6 @@
 namespace WiiXLaunch {
 
 namespace Surf {
-WXL_USE_wiixl_core(InstallHook);
 WXL_USE_wiixl_call(ResolveTarget);
 WXL_USE_wiixl_patch(Write);
 } // namespace Surf
@@ -56,48 +55,4 @@ struct CodePatch {
     }
 };
 
-namespace impl {
-
-template <class T>
-struct HookCommon {
-    inline static uintptr_t s_orig = 0;
-
-    static bool Install(uintptr_t switchOffset) {
-        const uintptr_t target = Surf::ResolveTarget(switchOffset, 0);
-        if (!target) {
-            WIIXL_LOG("Climate53: hook target unresolved (sw=%p)",
-                      reinterpret_cast<void*>(switchOffset));
-            return false;
-        }
-        s_orig = Surf::InstallHook(target,
-                                   reinterpret_cast<uintptr_t>(&T::Callback));
-        if (!s_orig) {
-            WIIXL_LOG("Climate53: InstallHook refused at %p",
-                      reinterpret_cast<void*>(target));
-            return false;
-        }
-        return true;
-    }
-};
-
-template <class T>
-struct TrampolineHookBase : HookCommon<T> {
-    template <class Self = T, class... A>
-    static auto Orig(A... args) -> decltype(Self::Callback(args...)) {
-        using Fn = decltype(&Self::Callback);
-        if (!HookCommon<T>::s_orig) return decltype(Self::Callback(args...))();
-        return reinterpret_cast<Fn>(HookCommon<T>::s_orig)(args...);
-    }
-};
-
-template <class T>
-struct ReplaceHookBase : HookCommon<T> {};
-
-} // namespace impl
 } // namespace WiiXLaunch
-
-#define WIIXL_HOOK_DEFINE_TRAMPOLINE(name) \
-    struct name : ::WiiXLaunch::impl::TrampolineHookBase<name>
-
-#define WIIXL_HOOK_DEFINE_REPLACE(name) \
-    struct name : ::WiiXLaunch::impl::ReplaceHookBase<name>

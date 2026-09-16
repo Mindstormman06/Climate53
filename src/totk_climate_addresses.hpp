@@ -34,7 +34,12 @@ constexpr Patch32 kBoundPatches[] = {
     { 0x0802BE4, 0x7100D05F, 0x7100D45F, "accessor clamp @0802be4"         },
     { 0x08C1D08, 0x7100D11F, 0x7100D51F, "bound @08c1d08"                  },
     { 0x091B238, 0x7100CC3F, 0x7100D03F, "ClimatePalette::loadResources"   },
+    { 0x099B97C, 0x7100CD1F, 0x7100D11F, "id guard @099b97c"               },
+    { 0x099BB24, 0x7100CD5F, 0x7100D15F, "id guard @099bb24"               },
+    { 0x099BCB0, 0x7100CD7F, 0x7100D17F, "id guard @099bcb0"               },
     { 0x099CB38, 0x7100D11F, 0x7100D51F, "bound @099cb38"                  },
+    { 0x099F24C, 0x7100D13F, 0x7100D53F, "clamp @099f24c"                  },
+    { 0x099F30C, 0x7100D13F, 0x7100D53F, "clamp @099f30c"                  },
     { 0x099EA58, 0x7100D13F, 0x7100D53F, "bound @099ea58"                  },
     { 0x099EC1C, 0x7100D13F, 0x7100D53F, "bound @099ec1c"                  },
     { 0x099EFE4, 0x7100D13F, 0x7100D53F, "bound @099efe4"                  },
@@ -54,6 +59,11 @@ constexpr Patch32 kBoundPatches[] = {
     { 0x1B53ACC, 0x7100D27F, 0x7100D67F, "bound @1b53acc"                  },
     { 0x1B53B20, 0x7100D27F, 0x7100D67F, "bound @1b53b20"                  },
     { 0x1B54514, 0x7100D11F, 0x7100D51F, "bound @1b54514"                  },
+    // WorldMgrMainField::getClimateByFieldMapArea - THE gate. It reads the
+    // area's climate index from areaEntry+0x8 and returns 0 for anything above
+    // 51, so temperature and weather got climate 0 while wind, which does not
+    // go through this function, correctly got 52.
+    { 0x287DE70, 0x7100CD7F, 0x7100D17F, "getClimateByFieldMapArea"        },
 };
 
 // Climate::onLoadGameData restores the weather forecast from the save file,
