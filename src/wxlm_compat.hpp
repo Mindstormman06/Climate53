@@ -13,6 +13,7 @@
 namespace WiiXLaunch {
 
 namespace Surf {
+WXL_USE_wiixl_core(ModReadFile);
 WXL_USE_wiixl_call(ResolveTarget);
 WXL_USE_wiixl_patch(Write);
 } // namespace Surf

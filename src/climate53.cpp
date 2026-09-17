@@ -3,93 +3,157 @@
 
 namespace Climate53 {
 
-// Name of the 53rd climate. Four things have to agree on this string:
-//   - the name registered in the game's climate name table (see Install),
-//   - the "Climate" value in the ecocat entries inside Bootup.pack,
-//   - romfs/WorldMgr/ResClimate/CustomClimate53.game__wm__ResClimate.bgyml,
-//   - the RESTBL entry for that path.
-static const char kCustomClimate53Name[] = "CustomClimate53";
-
-// Climate::onLoadGameData restores the weather forecast from the save file,
-// overwriting the one Climate::initialize just generated from this climate's
-// rates. Without this, temperature and wind take effect immediately but the
-// weather keeps following whatever schedule the save was carrying.
-//
-// The cost is that the forecast no longer persists across save/load - it is
-// re-rolled on each load rather than continuing the stored schedule.
 static constexpr bool kSkipClimateSaveRestore = true;
 
-static bool ApplyAll(const Patch32* patches, uint32_t count, const char* group) {
-    for (uint32_t i = 0; i < count; ++i) {
-        const Patch32& p = patches[i];
-        if (!WiiXLaunch::CodePatch::WriteChecked(p.offset, p.from, p.to)) {
-            WIIXL_LOG("Climate53: %s patch failed at %p (%s)",
-                      group, reinterpret_cast<void*>(p.offset), p.what);
+// --- climates.ini ------------------------------------------------------------
+static char        g_iniBuffer[4096];
+static const char* g_names[kMaxExtraClimates];
+static uint32_t    g_nameCount = 0;
+
+static const char* g_nameTable[kMaxClimateCount];
+
+static bool IsSpace(char c) { return c == ' ' || c == '\t' || c == '\r'; }
+
+static bool LoadClimateList() {
+    const int32_t read = WiiXLaunch::Surf::ModReadFile("climates.ini", g_iniBuffer, sizeof(g_iniBuffer) - 1);
+    if (read <= 0) {
+        WIIXL_LOG("Climate53: no climates.ini (or empty) - nothing to add");
+        return true;
+    }
+    g_iniBuffer[read] = '\0';
+
+    uint32_t i = 0;
+    const uint32_t len = static_cast<uint32_t>(read);
+    while (i < len) {
+        while (i < len && (IsSpace(g_iniBuffer[i]) || g_iniBuffer[i] == '\n')) ++i;
+        if (i >= len) break;
+
+        if (g_iniBuffer[i] == '#' || g_iniBuffer[i] == ';') {
+            while (i < len && g_iniBuffer[i] != '\n') ++i;
+            continue;
+        }
+
+        const uint32_t start = i;
+        while (i < len && g_iniBuffer[i] != '\n') ++i;
+        uint32_t end = i;
+
+        if (i < len) ++i;
+
+        while (end > start && IsSpace(g_iniBuffer[end - 1])) --end;
+        if (end == start) continue;
+
+        if (g_nameCount >= kMaxExtraClimates) {
+            WIIXL_LOG("Climate53: climates.ini lists more than %d climates (the build ceiling) - refusing", (int)kMaxExtraClimates);
+            return false;
+        }
+        g_iniBuffer[end] = '\0';
+        g_names[g_nameCount++] = &g_iniBuffer[start];
+    }
+    return true;
+}
+
+// --- instruction rewriting ---------------------------------------------------
+static uint32_t MovzWithImm(uint32_t from, uint32_t imm16) {
+    return (from & 0xFFE0001Fu) | (imm16 << 5);
+}
+static uint32_t CmpWithDelta(uint32_t from, uint32_t delta) {
+    const uint32_t imm = ((from >> 10) & 0xFFFu) + delta;
+    return (from & 0xFFC003FFu) | (imm << 10);
+}
+
+static bool ApplyLayout(uint32_t count) {
+    const uint32_t arraySize = count * kClimateRecordSize;
+    for (uint32_t i = 0; i < sizeof(kLayoutPatches) / sizeof(kLayoutPatches[0]); ++i) {
+        const LayoutPatch& p = kLayoutPatches[i];
+        uint32_t to = 0;
+        switch (p.kind) {
+            case LayoutKind::AllocSize:    to = MovzWithImm(p.from, arraySize + 0x10); break;
+            case LayoutKind::TailBase:     to = MovzWithImm(p.from, arraySize);        break;
+            case LayoutKind::TailPlus8:    to = MovzWithImm(p.from, arraySize + 8);    break;
+            case LayoutKind::TailStoreReg: to = 0xF900011Fu;                           break;
+        }
+        if (!WiiXLaunch::CodePatch::WriteChecked(p.offset, p.from, to)) {
+            WIIXL_LOG("Climate53: layout patch failed at %p (%s)",
+                      reinterpret_cast<void*>(p.offset), p.what);
             return false;
         }
     }
-    WIIXL_LOG("Climate53: %s - %d patch(es) applied", group, (int)count);
+    WIIXL_LOG("Climate53: record array -> 0x%X bytes for %d climates, tail at +0x%X", (unsigned)arraySize, (int)count, (unsigned)arraySize);
+    return true;
+}
+
+static bool ApplyBounds(uint32_t delta) {
+    const uint32_t n = sizeof(kBoundPatches) / sizeof(kBoundPatches[0]);
+    for (uint32_t i = 0; i < n; ++i) {
+        const BoundPatch& p = kBoundPatches[i];
+        if (!WiiXLaunch::CodePatch::WriteChecked(p.offset, p.from, CmpWithDelta(p.from, delta))) {
+            WIIXL_LOG("Climate53: bound patch failed at %p (%s)", reinterpret_cast<void*>(p.offset), p.what);
+            return false;
+        }
+    }
+    WIIXL_LOG("Climate53: bounds - %d site(s) raised by %d", (int)n, (int)delta);
+    return true;
+}
+
+static bool RelocateNameTable() {
+    const uintptr_t globalAddr = WiiXLaunch::ResolveTarget(Offsets::Climate_NameTable_Global);
+    const uintptr_t expected   = WiiXLaunch::ResolveTarget(Offsets::Climate_NameTable_Base);
+    if (!globalAddr || !expected) {
+        WIIXL_LOG("Climate53: could not resolve the climate name table!");
+        return false;
+    }
+
+    uintptr_t* global = reinterpret_cast<uintptr_t*>(globalAddr);
+    if (*global != expected) {
+        WIIXL_LOG("Climate53: name table global holds %p, expected %p - refusing to relocate something this is not", (void*)*global, (void*)expected);
+        return false;
+    }
+
+    const char* const* stock = reinterpret_cast<const char* const*>(*global + Offsets::Climate_NameTable_Rel);
+    for (uint32_t i = 0; i < kStockClimateCount; ++i) g_nameTable[i] = stock[i];
+
+
+    WIIXL_LOG("Climate53: stock slot 0 -> \"%s\"", g_nameTable[0] ? g_nameTable[0] : "<null>");
+
+    for (uint32_t i = 0; i < g_nameCount; ++i) {
+        g_nameTable[kStockClimateCount + i] = g_names[i];
+        WIIXL_LOG("Climate53: climate %d = \"%s\"", (int)(kStockClimateCount + i), g_names[i]);
+    }
+
+    *global = reinterpret_cast<uintptr_t>(g_nameTable) - Offsets::Climate_NameTable_Rel;
+    WIIXL_LOG("Climate53: name table relocated to %p (%d entries)", (void*)g_nameTable, (int)(kStockClimateCount + g_nameCount));
     return true;
 }
 
 bool Install() {
-    WIIXL_LOG("Climate53: Installing TotK 1.2.1 53rd Climate mod...");
+    WIIXL_LOG("Climate53: Installing TotK 1.2.1 custom climate mod...");
 
-    // 1. Grow the Climate object so record 52 is a real array entry, and move
-    //    the tail member out of the way. This must land before any bound is
-    //    raised: a 53rd index into a 52-entry array runs off the end of the
-    //    allocation and smashes the next heap block.
-    if (!ApplyAll(kLayoutPatches,
-                  sizeof(kLayoutPatches) / sizeof(kLayoutPatches[0]), "layout")) {
-        return false;
-    }
-    WIIXL_LOG("Climate53: record array 0x%X -> 0x%X bytes, tail member moved to +0x%X",
-              (unsigned)kStockArraySize, (unsigned)kNewArraySize, (unsigned)kNewArraySize);
-
-    // 2. Register the climate name in slot 52 of the game's name table.
-    //    That table lives in .data, which is already mapped RW and therefore
-    //    sits outside the alias wiixl.patch writes code through - it needs a
-    //    plain store, so the origin check is done here instead.
-    {
-        const uintptr_t slot0Addr  = WiiXLaunch::ResolveTarget(Offsets::Climate_NameTable_Slot0);
-        const uintptr_t slot52Addr = WiiXLaunch::ResolveTarget(Offsets::Climate_NameTable_Slot52);
-        if (!slot0Addr || !slot52Addr) {
-            WIIXL_LOG("Climate53: could not resolve the climate name table!");
-            return false;
-        }
-
-        const char** table = reinterpret_cast<const char**>(slot0Addr);
-        const char** slot  = reinterpret_cast<const char**>(slot52Addr);
-
-        if (*slot != nullptr) {
-            WIIXL_LOG("Climate53: name table slot %d already holds %p - refusing to claim it!",
-                      (int)kCustomClimateIndex, (const void*)*slot);
-            return false;
-        }
-        *slot = kCustomClimate53Name;
-
-        // Slot 0 is logged as a landmark: if it is not "HyrulePlainClimate"
-        // the table base is wrong and nothing below means what it says.
-        WIIXL_LOG("Climate53: name table slot 0  -> \"%s\"", table[0] ? table[0] : "<null>");
-        WIIXL_LOG("Climate53: name table slot %d -> \"%s\"",
-                  (int)kCustomClimateIndex, *slot ? *slot : "<null>");
+    if (!LoadClimateList()) return false;
+    if (g_nameCount == 0) {
+        WIIXL_LOG("Climate53: no climates configured - leaving the game stock");
+        return true;
     }
 
-    // 3. Raise every place the game caps a climate index at 52.
-    if (!ApplyAll(kBoundPatches,
-                  sizeof(kBoundPatches) / sizeof(kBoundPatches[0]), "bounds")) {
-        return false;
-    }
+    const uint32_t count = kStockClimateCount + g_nameCount;   // N
+    const uint32_t delta = g_nameCount;
 
-    // 4. Let the generated forecast survive loading a save.
+    if (!ApplyLayout(count)) return false;
+
+    if (!RelocateNameTable()) return false;
+
+    if (!ApplyBounds(delta)) return false;
+
     if (kSkipClimateSaveRestore) {
-        if (!ApplyAll(&kSkipSaveRestorePatch, 1, "skip save-restore")) return false;
-        WIIXL_LOG("Climate53: the saved weather forecast will NOT be restored - the "
-                  "forecast generated from this climate stands");
+        const SimplePatch& p = kSkipSaveRestorePatch;
+        if (!WiiXLaunch::CodePatch::WriteChecked(p.offset, p.from, p.to)) {
+            WIIXL_LOG("Climate53: could not skip the saved forecast restore (%s)", p.what);
+            return false;
+        }
+        WIIXL_LOG("Climate53: the saved weather forecast will NOT be restored");
     }
 
-    WIIXL_LOG("Climate53: installed - climate %d is \"%s\"",
-              (int)kCustomClimateIndex, kCustomClimate53Name);
+    WIIXL_LOG("Climate53: installed - %d climates (%d stock + %d added)",
+              (int)count, (int)kStockClimateCount, (int)g_nameCount);
     return true;
 }
 

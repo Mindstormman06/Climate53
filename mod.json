@@ -1,8 +1,14 @@
 {
   "id": "climate53",
   "entry": "src/mod.cpp",
-  "sources": ["src/climate53.cpp"],
+  "sources": [
+    "src/climate53.cpp"
+  ],
   "target": "switch",
   "heapRequest": 4096,
-  "require": ["wiixl.core@1.0", "wiixl.call@1.0", "wiixl.patch@1.0"]
+  "require": [
+    "wiixl.core@1.5",
+    "wiixl.call@1.0",
+    "wiixl.patch@1.0"
+  ]
 }
